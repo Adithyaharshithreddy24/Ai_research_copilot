@@ -5,6 +5,7 @@ class GraphState(TypedDict):
     chat_id: str
     intent: Optional[str]
     query: Optional[str]
+    max_results: Optional[int]
     papers: Optional[List]
     response: Optional[str]
 
@@ -12,15 +13,15 @@ from services.llm_service import generate_response
 
 def classify_intent(state: GraphState):
     prompt = f"""
-Classify the user input into one of:
-- new_topic
-- follow_up
-- action
+    Classify the user input into one of:
+    - new_topic
+    - follow_up
+    - action
 
-Input: {state['user_input']}
+    Input: {state['user_input']}
 
-Only return one word.
-"""
+    Only return one word.
+    """
 
     result = generate_response(prompt).strip().lower()
 
@@ -36,8 +37,9 @@ Only return one word.
 
 def generate_query(state: GraphState):
     prompt = f"""
-Convert the following research idea into an arXiv search query.
-
+    Understand the user's research topic and convert it into an arXiv search query.
+    First try to find the core idea of the user, see if any specific methods, domains, or keywords are mentioned, also if there are max_number/min_number of papers needed.
+    Generate a concise search query that captures the essence of the user's research interest, suitable for arXiv's search syntax.
 Input: {state['user_input']}
 
 Return only the search query.

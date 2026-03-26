@@ -22,7 +22,6 @@ def create_chat_api(req: CreateChatRequest):
 from fastapi import APIRouter
 from models.schemas import ChatMessageRequest
 from db.memory_store import add_message, create_chat
-from services.arxiv_service import fetch_papers
 from services.vector_service import add_documents
 from utils.helpers import generate_search_query
 
