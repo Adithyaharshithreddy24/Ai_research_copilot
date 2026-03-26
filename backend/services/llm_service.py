@@ -1,15 +1,19 @@
-from langchain_ollama import OllamaLLM
+import os
+import google.generativeai as genai
+from dotenv import load_dotenv
 
-llm = OllamaLLM(
-    model="qwen3:4b",
-    base_url="http://localhost:11434"
+load_dotenv()
+
+genai.configure(
+    api_key=os.getenv("GEMINI_API_KEY")
 )
 
-def generate_response(prompt: str):
-    return llm.invoke(prompt)
+llm = genai.GenerativeModel("gemini-1.5-flash")
 
 def generate_response(prompt: str):
-    return llm.invoke(prompt)
+    response = llm.generate_content(prompt)
+    return response.text
+
 
 def generate_literature_review(texts: list):
     combined_text = "\n\n".join(texts[:10])  # limit size
@@ -24,10 +28,13 @@ Given multiple research paper abstracts, generate a structured literature review
 - Findings
 - Trends
 
-{texts}
+Abstracts:
+{combined_text}
 """
 
-    return llm.invoke(prompt)
+    response = llm.generate_content(prompt)
+    return response.text
+
 
 def generate_research_gap(text: str):
     prompt = f"""
@@ -41,7 +48,9 @@ Identify:
 Abstract:
 {text}
 """
-    return llm.invoke(prompt)
+
+    response = llm.generate_content(prompt)
+    return response.text
 
 def generate_citations(papers, style):
     prompt = f"""
@@ -50,4 +59,6 @@ Format the following papers into {style} citations.
 Papers:
 {papers}
 """
-    return llm.invoke(prompt)
+
+    response = llm.generate_content(prompt)
+    return response.text

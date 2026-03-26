@@ -2,6 +2,7 @@ from typing import TypedDict, List, Optional
 
 class GraphState(TypedDict):
     user_input: str
+    paper_count: int
     chat_id: str
     intent: Optional[str]
     query: Optional[str]
@@ -34,23 +35,53 @@ Only return one word.
     state["intent"] = intent
     return state
 
+import json
+
 def generate_query(state: GraphState):
     prompt = f"""
-Convert the following research idea into an arXiv search query.
+You are a strict JSON generator.
 
-Input: {state['user_input']}
+Understand the user's research topic and convert it into an arXiv search query.
 
-Return only the search query.
+Rules:
+- Extract core idea, methods, domain
+- Detect paper count if mentioned
+- Default paper_count = 5
+- Max paper_count = 10
+
+Return ONLY valid JSON like this:
+{{
+  "query": "your search query",
+  "paper_count": 5
+}}
+
+User Input:
+{state['user_input']}
 """
 
-    query = generate_response(prompt)
-    state["query"] = query.strip()
+    response = generate_response(prompt)
+
+    print("RAW LLM RESPONSE:", response)
+
+    try:
+        data = json.loads(response)
+
+        state["query"] = data.get("query", state["user_input"])
+        state["paper_count"] = min(int(data.get("paper_count", 5)), 10)
+
+    except Exception as e:
+        print("JSON PARSE ERROR:", e)
+
+        # fallback (VERY IMPORTANT)
+        state["query"] = state["user_input"]
+        state["paper_count"] = 5
+
     return state
 
 from services.arxiv_service import fetch_papers
 
 def fetch_arxiv(state: GraphState):
-    papers = fetch_papers(state["query"], max_results=5)
+    papers = fetch_papers(state["query"], state["paper_count"])
     state["papers"] = papers
     return state
 
@@ -109,6 +140,7 @@ graph = build_graph()
 def run_graph(user_input: str, chat_id: str):
     state = {
         "user_input": user_input,
+        "paper_count": None,
         "chat_id": chat_id,
         "intent": None,
         "query": None,

@@ -19,13 +19,6 @@ def create_chat_api(req: CreateChatRequest):
     return {"chat_id": chat_id}
 
 
-from fastapi import APIRouter
-from models.schemas import ChatMessageRequest
-from db.memory_store import add_message, create_chat
-from services.arxiv_service import fetch_papers
-from services.vector_service import add_documents
-from utils.helpers import generate_search_query
-
 router = APIRouter()
 
 from services.langgraph_flow import run_graph
@@ -41,9 +34,9 @@ def chat_message(req: ChatMessageRequest):
 
     add_message(chat_id, "user", user_input)
 
+
     # 🧠 Run LangGraph
     result = run_graph(user_input, chat_id)
-
     papers = result.get("papers", [])
     response_text = result.get("response", "")
 

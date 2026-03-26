@@ -1,6 +1,6 @@
 import arxiv
 
-def fetch_papers(query: str, max_results=5):
+def fetch_papers(query: str, max_results: int):
     search = arxiv.Search(
         query=query,
         max_results=max_results,

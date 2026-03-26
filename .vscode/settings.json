@@ -1,0 +1,5 @@
+{
+    "powerquery.client.additionalSymbolsDirectories": [
+        "/Users/mymac/Desktop/vscode/projects/AICopilot/.vscode/excel-pq-symbols"
+    ]
+}
