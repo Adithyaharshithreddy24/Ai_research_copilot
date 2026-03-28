@@ -12,6 +12,34 @@ class GraphState(TypedDict):
 
 from services.llm_service import generate_response
 
+def talkable(state: GraphState):
+    prompt = f"""
+You are an academic research assistant.
+
+Rules:
+- If input is unrelated to research → respond EXACTLY: not_talkable
+- If greeting/small talk → respond with a greeting AND include the word: greeting
+- Otherwise → respond EXACTLY: proceed
+
+User Input: {state["user_input"]}
+"""
+
+    response = generate_response(prompt).strip().lower()
+    print(response)
+    state["response"] = response
+    return state
+
+def route_talkable(state: GraphState):
+    res = state["response"]
+
+    if "not_talkable" in res:
+        return "end"
+    elif "greeting" in res:
+        return "end"
+    else:
+        return "intent"
+    
+
 def classify_intent(state: GraphState):
     prompt = f"""
 Classify the user input into one of:
@@ -112,15 +140,27 @@ def build_graph():
     builder = StateGraph(GraphState)
 
     # Nodes
+    builder.add_node("talkable", talkable)
     builder.add_node("intent", classify_intent)
     builder.add_node("generate_query", generate_query)
     builder.add_node("fetch_arxiv", fetch_arxiv)
     builder.add_node("store", store_papers)
     builder.add_node("generate_response", generate_response_node)
 
-    # Flow
-    builder.set_entry_point("intent")
+    # ✅ Start from talkable
+    builder.set_entry_point("talkable")
 
+    # ✅ Conditional routing from talkable
+    builder.add_conditional_edges(
+        "talkable",
+        route_talkable,
+        {
+            "intent": "intent",
+            "end": "__end__"
+        }
+    )
+
+    # Existing flow
     builder.add_conditional_edges(
         "intent",
         route_intent,

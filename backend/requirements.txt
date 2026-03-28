@@ -7,3 +7,7 @@ arxiv
 chromadb
 langgraph
 reportlab
+PyPDF2
+aiofiles
+fitz
+pytesseract

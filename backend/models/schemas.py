@@ -17,11 +17,17 @@ class ChatMessageRequest(BaseModel):
     message: str
     chat_id: Optional[str] = None
 
+    # OPTIONAL: metadata (useful later)
+    has_files: Optional[bool] = False
+
 
 class ChatMessageResponse(BaseModel):
     chat_id: str
     papers: List[Dict]
     message: str
+
+    # OPTIONAL: debugging / UI
+    sources: Optional[List[str]] = []
 
 
 # =========================
