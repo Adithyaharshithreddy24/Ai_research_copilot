@@ -374,8 +374,8 @@ function App() {
     <div className="app">
       <header className="app-header">
         <div>
-          <p className="product-tag">Research Co-Pilot</p>
-          <h1>Professional Research Workspace</h1>
+          <h1>Research Co-Pilot</h1>
+          <p className="product-tag">Professional Research Workspace</p>
           <p className="subtitle">Clear flow. Focused screens. No clutter.</p>
         </div>
         {user && (
