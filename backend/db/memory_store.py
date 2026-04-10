@@ -1,5 +1,4 @@
 import uuid
-
 users = {}
 chats = {}
 
@@ -23,3 +22,7 @@ def add_message(chat_id: str, role: str, content: str):
             "role": role,
             "content": content
         })
+
+def clear_chat(chat_id: str):
+    if chat_id in chats:
+        chats[chat_id]["messages"] = []

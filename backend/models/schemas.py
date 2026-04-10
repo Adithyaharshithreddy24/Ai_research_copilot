@@ -7,27 +7,16 @@ from pydantic import BaseModel
 # =========================
 class LoginRequest(BaseModel):
     name: str
+    email: str
 
 
 # =========================
-# 💬 CHAT
+# 💬 CHAT (ONLY RESPONSE MODEL NEEDED)
 # =========================
-class ChatMessageRequest(BaseModel):
-    user_id: str
-    message: str
-    chat_id: Optional[str] = None
-
-    # OPTIONAL: metadata (useful later)
-    has_files: Optional[bool] = False
-
-
 class ChatMessageResponse(BaseModel):
     chat_id: str
     papers: List[Dict]
     message: str
-
-    # OPTIONAL: debugging / UI
-    sources: Optional[List[str]] = []
 
 
 # =========================
@@ -39,4 +28,4 @@ class ActionRequest(BaseModel):
 
 class CitationRequest(BaseModel):
     chat_id: str
-    style: str  # "APA", "IEEE", "MLA"
+    style: str

@@ -1,49 +1,93 @@
-from fastapi import APIRouter
-from pydantic import BaseModel
-from db.memory_store import create_chat
-from models.schemas import ChatMessageRequest
-from db.memory_store import add_message
-from services.arxiv_service import fetch_papers
-from services.vector_service import add_documents
-from utils.helpers import generate_search_query
+from fastapi import APIRouter, UploadFile, File, Form
+from typing import List, Optional, Union
 
-router = APIRouter()
-
-class CreateChatRequest(BaseModel):
-    user_id: str
-    title: str
-
-@router.post("/create")
-def create_chat_api(req: CreateChatRequest):
-    chat_id = create_chat(req.user_id, req.title)
-    return {"chat_id": chat_id}
-
-
-from fastapi import APIRouter
-from models.schemas import ChatMessageRequest
 from db.memory_store import add_message, create_chat
-from services.vector_service import add_documents
-from utils.helpers import generate_search_query
-
-router = APIRouter()
-
 from services.langgraph_flow import run_graph
 
+from services.pdf_service import extract_text
+from services.chunk_service import chunk_text
+from services.vector_service import add_text_chunks
+
+import os
+import uuid
+import aiofiles
+
+router = APIRouter()
+
+UPLOAD_DIR = "data/pdfs"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
 @router.post("/message")
-def chat_message(req: ChatMessageRequest):
-    user_input = req.message
-    chat_id = req.chat_id
-    user_id = req.user_id
-
+async def chat_message(
+    user_id: str = Form(...),
+    message: str = Form(...),
+    chat_id: Optional[str] = Form(None),
+    mode: str = Form("keyword"),
+    files: Optional[List[Union[UploadFile, str]]] = File(None)
+):
+    # ------------------------
+    # 🧠 CREATE CHAT
+    # ------------------------
     if not chat_id:
-        chat_id = create_chat(user_id, title=user_input[:30])
+        chat_id = create_chat(user_id, message[:30])
 
-    add_message(chat_id, "user", user_input)
+    add_message(chat_id, "user", message)
 
-    result = run_graph(user_input, chat_id)
-    print("Length of papers found:", len(result.get("papers", [])))
-    papers = result.get("papers", [])
-    response_text = result.get("response", "")
+    # ------------------------
+    # 📄 HANDLE FILES
+    # ------------------------
+    valid_files = []
+
+    if files:
+        for f in files:
+            # ✅ Ignore Swagger empty strings
+            if isinstance(f, str):
+                continue
+
+            if f and hasattr(f, "filename") and f.filename:
+                valid_files.append(f)
+
+    if valid_files:
+        all_chunks = []
+
+        try:
+            for file in valid_files:
+                file_id = str(uuid.uuid4())
+                path = f"{UPLOAD_DIR}/{file_id}_{file.filename}"
+
+                # Save file
+                async with aiofiles.open(path, "wb") as buffer:
+                    content = await file.read()
+                    await buffer.write(content)
+
+                # Extract text
+                text = extract_text(path)
+
+                # Chunk
+                chunks = chunk_text(text)
+
+                all_chunks.extend(chunks)
+
+            # Store in vector DB
+            add_text_chunks(f"chat_{chat_id}", all_chunks)
+        except Exception as e:
+            print("CHAT FILE PROCESSING ERROR:", e)
+
+    # ------------------------
+    # 🤖 RUN GRAPH
+    # ------------------------
+    try:
+        result = run_graph(message, chat_id, mode=mode)
+        response_text = result.get("response", "")
+        papers = result.get("papers", [])
+    except Exception as e:
+        print("CHAT GRAPH ERROR:", e)
+        response_text = (
+            "I could not reach external research/model services right now. "
+            "Please try again in a moment."
+        )
+        papers = []
 
     add_message(chat_id, "assistant", response_text)
 
