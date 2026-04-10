@@ -12,3 +12,4 @@ aiofiles
 fitz
 pytesseract
 pypdf
+python-multipart
