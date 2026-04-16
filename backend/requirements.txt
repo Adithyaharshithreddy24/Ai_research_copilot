@@ -11,3 +11,5 @@ PyPDF2
 aiofiles
 fitz
 pytesseract
+pypdf
+python-multipart
