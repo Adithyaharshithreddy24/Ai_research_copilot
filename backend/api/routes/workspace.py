@@ -1,45 +1,41 @@
-from fastapi import FastAPI, UploadFile, File
-import os
+from fastapi import APIRouter, UploadFile, File
 import uuid
+import os
 import aiofiles
-from fastapi import APIRouter
 
-from services.pdf_service import parse_text, parse_ocr, parse_images
+from services.pdf_service import extract_text
+from services.chunk_service import chunk_text
+from services.vector_service import add_text_chunks
 
 router = APIRouter()
 
-import os
-
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-UPLOAD_DIR = os.path.join(BASE_DIR, "data", "pdfs")
-
+UPLOAD_DIR = "data/pdfs"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-
 @router.post("/upload-pdf")
-async def upload_pdf(file: UploadFile = File(...)):
-    file_id = str(uuid.uuid4())
-    file_path = f"{UPLOAD_DIR}/{file_id}_{file.filename}"
-
-    # Save file (async)
-    async with aiofiles.open(file_path, "wb") as buffer:
-        content = await file.read()
-        await buffer.write(content)
-
+async def upload_pdf(file: UploadFile = File(...), chat_id: str = ""):
     try:
-        text = parse_text(file_path)
+        file_id = str(uuid.uuid4())
+        file_path = f"{UPLOAD_DIR}/{file_id}_{file.filename}"
 
-        if len(text.strip()) < 50:
-            text = parse_ocr(file_path)
+        async with aiofiles.open(file_path, "wb") as buffer:
+            content = await file.read()
+            await buffer.write(content)
 
-        images = parse_images(file_path)
+        text = extract_text(file_path)
+        chunks = chunk_text(text)
+
+        add_text_chunks(f"chat_{chat_id}", chunks)
 
         return {
             "file": file.filename,
-            "text": text,
-            "images": images
+            "chunks": len(chunks),
+            "message": "PDF processed and stored"
         }
-
     except Exception as e:
-        return {"error": str(e)}
+        print("WORKSPACE UPLOAD ERROR:", e)
+        return {
+            "file": getattr(file, "filename", "unknown.pdf"),
+            "chunks": 0,
+            "message": "Could not process this PDF right now. Please try another file."
+        }

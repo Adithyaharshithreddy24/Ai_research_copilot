@@ -1,192 +1,261 @@
-from typing import TypedDict, List, Optional
+import os
+import re
+from typing import List, Optional, TypedDict
+
+from langgraph.graph import END, StateGraph
+
+from services.arxiv_service import fetch_papers
+from services.llm_service import generate_discovery_suggestions
+from services.rag_service import paper_chat_answer, rag_answer
+from services.vector_service import add_documents
+
 
 class GraphState(TypedDict):
     user_input: str
-    paper_count: int
     chat_id: str
+    mode: str
     intent: Optional[str]
-    query: Optional[str]
-    max_results: Optional[int]
     papers: Optional[List]
     response: Optional[str]
 
-from services.llm_service import generate_response
+
+def _get_max_discovery_papers() -> int:
+    raw = os.getenv("MAX_DISCOVERY_PAPERS", "5").strip()
+    try:
+        value = int(raw)
+        return max(1, min(value, 20))
+    except Exception:
+        return 5
+
 
 def talkable(state: GraphState):
-    prompt = f"""
-You are an academic research assistant.
+    text = state["user_input"].lower().strip()
 
-Rules:
-- If input is unrelated to research → respond EXACTLY: not_talkable
-- If greeting/small talk → respond with a greeting AND include the word: greeting
-- Otherwise → respond EXACTLY: proceed
+    if text in ["hi", "hello", "hey"]:
+        state["response"] = "Hello! I can help you with research papers and PDFs."
+        state["intent"] = "end"
+        return state
 
-User Input: {state["user_input"]}
-"""
+    if len(text) < 2:
+        state["response"] = "Please enter a meaningful query."
+        state["intent"] = "end"
+        return state
 
-    response = generate_response(prompt).strip().lower()
-    print(response)
-    state["response"] = response
+    state["intent"] = "proceed"
     return state
 
-def route_talkable(state: GraphState):
-    res = state["response"]
-
-    if "not_talkable" in res:
-        return "end"
-    elif "greeting" in res:
-        return "end"
-    else:
-        return "intent"
-    
 
 def classify_intent(state: GraphState):
-    prompt = f"""
-Classify the user input into one of:
-- new_topic (user is asking for papers / searching a topic)
-- follow_up (referring to previous results)
-- action (operations like save, delete, summarize)
+    text = state["user_input"].lower()
+    follow_up_keywords = [
+        "this",
+        "that",
+        "these",
+        "those",
+        "above",
+        "previous",
+        "earlier",
+        "it",
+        "them",
+        "continue",
+        "elaborate",
+        "explain this",
+    ]
 
-Input: {state['user_input']}
+    def contains_token(token: str) -> bool:
+        if " " in token:
+            return token in text
+        return bool(re.search(rf"\b{re.escape(token)}\b", text))
 
-Only return one word exactly: new_topic, follow_up, or action.
-"""
-
-    result = generate_response(prompt).strip().lower()
-
-    if "follow" in result:
-        intent = "follow_up"
-    elif "action" in result:
-        intent = "action"
+    if any(contains_token(x) for x in ["summarize", "review", "citation", "gap"]):
+        state["intent"] = "action"
+    elif any(contains_token(x) for x in follow_up_keywords):
+        state["intent"] = "follow_up"
     else:
-        intent = "new_topic"
-
-    state["intent"] = intent
-    return state
-
-import json
-
-def generate_query(state: GraphState):
-    prompt = f"""
-You are a strict JSON generator.
-
-Understand the user's research topic and convert it into an arXiv search query.
-
-Rules:
-- Extract core idea, methods, domain
-- Detect paper count if mentioned(Eg. "top 6 papers on X" == paper_count: 6)
-- Default paper_count = 5(if not specified)
-- Max paper_count = 10(to avoid overload)
-
-Return ONLY valid JSON like this:
-{{
-  "query": "your search query",
-  "paper_count": 5
-}}
-
-User Input:
-{state['user_input']}
-"""
-
-    response = generate_response(prompt)
-
-
-    try:
-        data = json.loads(response)
-        print("Parsed JSON:", data)
-        state["query"] = data.get("query", state["user_input"])
-        state["paper_count"] = min(int(data.get("paper_count", 5)), 10)
-
-    except Exception as e:
-        print("JSON PARSE ERROR:", e)
-
-        # fallback (VERY IMPORTANT)
-        state["query"] = state["user_input"]
-        state["paper_count"] = 5
+        state["intent"] = "new_topic"
 
     return state
 
-from services.arxiv_service import fetch_papers
 
-def fetch_arxiv(state: GraphState):
-    print(state["paper_count"])
-    papers = fetch_papers(state["query"], state["paper_count"])
+def fetch_arxiv_node(state: GraphState):
+    query = _extract_search_query(state["user_input"])
+    papers = _discover_papers(
+        query,
+        state["chat_id"],
+        mode=state.get("mode", "keyword"),
+        max_results=_get_max_discovery_papers(),
+    )
     state["papers"] = papers
     return state
 
-from services.vector_service import add_documents
 
-def store_papers(state: GraphState):
-    collection_name = f"chat_{state['chat_id']}"
-    add_documents(collection_name, state["papers"])
+def _get_discovery_mode() -> str:
+    mode = os.getenv("DISCOVERY_MODE", "hybrid").strip().lower()
+    if mode in {"arxiv_only", "gemini_only", "hybrid"}:
+        return mode
+    return "hybrid"
+
+
+def _is_arxiv_unavailable(papers: List[dict]) -> bool:
+    if not papers:
+        return True
+    first_title = str(papers[0].get("title", "")).lower() if isinstance(papers[0], dict) else ""
+    return "arxiv temporarily unavailable" in first_title
+
+
+def _discover_papers(query: str, chat_id: str, mode: str = "keyword", max_results: int = 2) -> List[dict]:
+    # Product rule:
+    # - keyword mode => hybrid discovery
+    # - paper mode => Gemini-only (no arXiv)
+    if mode == "paper":
+        return generate_discovery_suggestions(query, max_results=max_results)
+
+    discovery_mode = _get_discovery_mode()
+    if mode == "keyword":
+        discovery_mode = "hybrid"
+
+    if discovery_mode == "gemini_only":
+        return generate_discovery_suggestions(query, max_results=max_results)
+
+    if discovery_mode == "arxiv_only":
+        return fetch_papers(query, max_results, chat_id=chat_id)
+
+    arxiv_papers = fetch_papers(query, max_results, chat_id=chat_id)
+    if not _is_arxiv_unavailable(arxiv_papers):
+        return arxiv_papers
+
+    try:
+        return generate_discovery_suggestions(query, max_results=max_results)
+    except Exception as e:
+        print("GEMINI DISCOVERY ERROR:", e)
+        return arxiv_papers
+
+
+def _extract_search_query(user_input: str) -> str:
+    text = user_input.strip()
+    lowered = text.lower()
+
+    marker = "keyword/topic:"
+    if marker in lowered:
+        start = lowered.find(marker) + len(marker)
+        tail = text[start:].strip()
+        first_sentence = re.split(r"[.\n]", tail, maxsplit=1)[0].strip(" :;-")
+        if first_sentence:
+            return first_sentence
+
+    text = re.sub(r"(?i)^find\s+research\s+papers\s+(for|on)\s+", "", text).strip()
+    text = re.sub(r"(?i)^search\s+(papers|arxiv)\s+(for|on)\s+", "", text).strip()
+
+    return text or user_input.strip()
+
+
+def store_node(state: GraphState):
+    add_documents(f"chat_{state['chat_id']}", state["papers"])
     return state
+
+
+def route_after_talkable(state: GraphState):
+    if state.get("intent") == "end":
+        return "end"
+    return "intent"
+
+
+def route_after_intent(state: GraphState):
+    if state.get("mode") == "paper":
+        return "respond"
+
+    if state.get("intent") == "new_topic":
+        return "fetch"
+    return "respond"
+
 
 def generate_response_node(state: GraphState):
-    count = len(state.get("papers", []))
-    state["response"] = f"Found {count} relevant papers"
+    chat_id = state["chat_id"]
+    question = state["user_input"]
+    mode = state.get("mode", "keyword")
+
+    if mode == "paper":
+        try:
+            paper_resp = paper_chat_answer(chat_id, question)
+        except Exception as e:
+            print("PAPER CHAT ERROR:", e)
+            paper_resp = None
+
+        if paper_resp:
+            state["response"] = paper_resp
+            return state
+
+        state["response"] = (
+            "I could not find enough uploaded-paper context for that question. "
+            "Please upload/select your PDF and ask a document-specific question."
+        )
+        return state
+
+    try:
+        rag_resp = rag_answer(chat_id, question)
+    except Exception as e:
+        print("RAG ERROR:", e)
+        rag_resp = None
+
+    if rag_resp:
+        state["response"] = rag_resp
+        return state
+
+    papers = state.get("papers", [])
+    if papers:
+        text = "\n\n".join([f"- {p['title']}" for p in papers[:5]])
+        state["response"] = f"Top relevant papers:\n{text}"
+    else:
+        state["response"] = "No relevant data found."
+
     return state
 
-def route_intent(state: GraphState):
-    if state["intent"] == "new_topic":
-        return "generate_query"
-    elif state["intent"] == "follow_up":
-        return "generate_response"
-    elif state["intent"] == "action":
-        return "generate_response"
-    
-from langgraph.graph import StateGraph
 
 def build_graph():
     builder = StateGraph(GraphState)
 
-    # Nodes
     builder.add_node("talkable", talkable)
     builder.add_node("intent", classify_intent)
-    builder.add_node("generate_query", generate_query)
-    builder.add_node("fetch_arxiv", fetch_arxiv)
-    builder.add_node("store", store_papers)
-    builder.add_node("generate_response", generate_response_node)
+    builder.add_node("fetch", fetch_arxiv_node)
+    builder.add_node("store", store_node)
+    builder.add_node("respond", generate_response_node)
 
-    # ✅ Start from talkable
     builder.set_entry_point("talkable")
 
-    # ✅ Conditional routing from talkable
     builder.add_conditional_edges(
         "talkable",
-        route_talkable,
+        route_after_talkable,
         {
             "intent": "intent",
-            "end": "__end__"
-        }
+            "end": END,
+        },
     )
-
-    # Existing flow
     builder.add_conditional_edges(
         "intent",
-        route_intent,
+        route_after_intent,
         {
-            "generate_query": "generate_query",
-            "generate_response": "generate_response"
-        }
+            "fetch": "fetch",
+            "respond": "respond",
+        },
     )
-
-    builder.add_edge("generate_query", "fetch_arxiv")
-    builder.add_edge("fetch_arxiv", "store")
-    builder.add_edge("store", "generate_response")
+    builder.add_edge("fetch", "store")
+    builder.add_edge("store", "respond")
+    builder.add_edge("respond", END)
 
     return builder.compile()
 
+
 graph = build_graph()
 
-def run_graph(user_input: str, chat_id: str):
+
+def run_graph(user_input: str, chat_id: str, mode: str = "keyword"):
     state = {
         "user_input": user_input,
-        "paper_count": None,
         "chat_id": chat_id,
+        "mode": mode,
         "intent": None,
-        "query": None,
         "papers": [],
-        "response": None
+        "response": None,
     }
-    result = graph.invoke(state)
-    return result
+
+    return graph.invoke(state)
